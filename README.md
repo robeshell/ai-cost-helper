@@ -43,7 +43,8 @@
 
 ## 预览
 
-[在线演示](demo/index.html)：本地打开演示页，即可看到脚本的换算效果。
+- 在线演示：<https://robeshell.github.io/ai-cost-helper/>
+- 本地演示：[demo/index.html](demo/index.html)（配合脚本查看真实换算效果）
 
 ## 开发
 
