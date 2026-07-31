@@ -61,8 +61,8 @@
         HKD: { symbol: 'HK$', flag: '🇭🇰', name: '港币' },
         SGD: { symbol: 'S$', flag: '🇸🇬', name: '新加坡元' },
         KRW: { symbol: '₩', flag: '🇰🇷', name: '韩元' },
-        AUD: { symbol: 'A$', flag: '🇦🇺', name: '澳元' },
-        CAD: { symbol: 'C$', flag: '🇨🇦', name: '加元' }
+        AUD: { symbol: 'AU$', flag: '🇦🇺', name: '澳元' },
+        CAD: { symbol: 'CA$', flag: '🇨🇦', name: '加元' }
     };
 
     /**
