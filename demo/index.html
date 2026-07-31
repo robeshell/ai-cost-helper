@@ -358,6 +358,42 @@
             white-space: nowrap;
         }
 
+        /* ===== 演示浮窗 ===== */
+        .sim-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            line-height: 1.7;
+        }
+        .sim-row:hover {
+            background: #f3f4f6;
+        }
+        .sim-flag {
+            font-size: 15px;
+            width: 20px;
+            flex-shrink: 0;
+        }
+        .sim-code {
+            color: #6b7280;
+            font-size: 12px;
+            width: 36px;
+            flex-shrink: 0;
+        }
+        .sim-val {
+            margin-left: auto;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .sim-foot {
+            border-top: 1px solid #f0f0f0;
+            margin-top: 4px;
+            padding: 6px 8px 2px;
+            color: #9ca3af;
+            font-size: 11px;
+        }
+
         /* ===== Footer ===== */
         .footer {
             border-top: 1px solid var(--border);
@@ -555,10 +591,21 @@
             const FLAG = 'data-ai-cost-helper';
             const SIM = 'data-sim';
             const SIM_RATE = 7.24; // 模拟汇率（默认币种 CNY）
-            const SIM_CURRENCIES = { CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$', SGD: 'S$', KRW: '₩', AUD: 'A$', CAD: 'C$' };
+            const SIM_CURRENCIES = {
+                CNY: { symbol: '¥', flag: '🇨🇳', name: '人民币' },
+                EUR: { symbol: '€', flag: '🇪🇺', name: '欧元' },
+                GBP: { symbol: '£', flag: '🇬🇧', name: '英镑' },
+                JPY: { symbol: '¥', flag: '🇯🇵', name: '日元' },
+                HKD: { symbol: 'HK$', flag: '🇭🇰', name: '港币' },
+                SGD: { symbol: 'S$', flag: '🇸🇬', name: '新加坡元' },
+                KRW: { symbol: '₩', flag: '🇰🇷', name: '韩元' },
+                AUD: { symbol: 'A$', flag: '🇦🇺', name: '澳元' },
+                CAD: { symbol: 'C$', flag: '🇨🇦', name: '加元' }
+            };
             const SIM_RATES = { CNY: 7.24, EUR: 0.92, GBP: 0.79, JPY: 150, HKD: 7.8, SGD: 1.34, KRW: 1350, AUD: 1.5, CAD: 1.36 };
             let simDefault = 'CNY';
             let simPopup = ['EUR', 'GBP', 'JPY', 'HKD', 'SGD', 'KRW', 'AUD', 'CAD'];
+            let simPopupEnabled = true;
 
             function parseUSD(text) {
                 const regex = /\$((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g;
@@ -605,7 +652,8 @@
                 const value = (code === 'JPY' || code === 'KRW')
                     ? Math.round(amount).toLocaleString('zh-CN')
                     : String(Math.round(amount * 100) / 100);
-                return (SIM_CURRENCIES[code] || '') + value;
+                const info = SIM_CURRENCIES[code];
+                return (info ? info.symbol : '') + value;
             }
 
             function createBadge(text, title, usdValue) {
@@ -690,21 +738,26 @@
             function getSimPopup() {
                 if (simPopupEl) return simPopupEl;
                 simPopupEl = document.createElement('div');
-                simPopupEl.style.cssText = 'position:fixed;z-index:2147483647;background:#fff;color:#14161a;border:1px solid #e6e8ec;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:10px 14px;font-size:13px;line-height:1.8;display:none;min-width:150px;';
+                simPopupEl.className = 'sim-popup';
+                simPopupEl.style.cssText = 'position:fixed;z-index:2147483647;background:#fff;color:#1f2328;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.16);padding:8px;font-size:13px;display:none;min-width:180px;user-select:text;';
                 document.body.appendChild(simPopupEl);
                 return simPopupEl;
             }
 
             function showSimPopup(badge) {
+                if (!simPopupEnabled) return;
                 clearTimeout(simHideTimer);
                 const usd = Number(badge.getAttribute('data-usd'));
                 if (!usd) return;
                 const el = getSimPopup();
                 if (simActiveBadge === badge) { el.style.display = 'block'; return; }
                 simActiveBadge = badge;
-                const codes = [...new Set([simDefault, ...simPopup])];
-                const rows = codes.map(c => '<div>' + c + ' ' + formatMoney(usd * (SIM_RATES[c] || SIM_RATES.CNY), c) + '</div>');
-                rows.push('<div style="color:#9ca3af;font-size:11px;margin-top:4px">演示浮窗 · 真实脚本可自定义币种</div>');
+                const codes = simPopup;
+                const rows = codes.map(c => {
+                    const info = SIM_CURRENCIES[c];
+                    return '<div class="sim-row"><span class="sim-flag">' + (info ? info.flag : '') + '</span><span class="sim-code">' + c + '</span><span class="sim-val">' + formatMoney(usd * (SIM_RATES[c] || SIM_RATES.CNY), c) + '</span></div>';
+                });
+                rows.push('<div class="sim-foot">演示浮窗 · 悬停可复制</div>');
                 el.innerHTML = rows.join('');
                 el.style.display = 'block';
                 const r = badge.getBoundingClientRect();
@@ -719,20 +772,25 @@
                 if (simPopupEl) simPopupEl.style.display = 'none';
             }
 
+            function simSelecting() {
+                try { const s = window.getSelection(); return !!s && !!s.toString(); } catch (e) { return false; }
+            }
+
             document.addEventListener('mouseover', (e) => {
                 const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
                 if (badge && badge.hasAttribute('data-usd')) showSimPopup(badge);
             });
             document.addEventListener('mouseout', (e) => {
                 const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
-                if (!badge) simHideTimer = setTimeout(hideSimPopup, 300);
+                if (!badge && !simSelecting()) simHideTimer = setTimeout(hideSimPopup, 300);
             });
             document.addEventListener('click', (e) => {
                 const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
+                const inPopup = e.target.closest ? e.target.closest('.sim-popup') : null;
                 if (badge && badge.hasAttribute('data-usd')) {
-                    if (simPopupEl && simPopupEl.style.display === 'block') hideSimPopup();
+                    if (simPopupEl && simPopupEl.style.display === 'block' && !simSelecting()) hideSimPopup();
                     else showSimPopup(badge);
-                } else {
+                } else if (!inPopup && !simSelecting()) {
                     hideSimPopup();
                 }
             });

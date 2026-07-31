@@ -4,7 +4,7 @@
 // @name:zh-TW   AI 成本換算助手
 // @name:en      AI Cost Helper
 // @namespace    https://github.com/robeshell/ai-cost-helper
-// @version      1.2.0
+// @version      1.3.0
 // @description  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-CN  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-TW  自動將網頁中的美元價格轉換為人民幣顯示，懸停查看多幣種換算，方便查看 AI API、模型調用和海外服務成本
@@ -51,18 +51,18 @@
     const FLAG = 'data-ai-cost-helper';
 
     /**
-     * 支持的币种与货币符号
+     * 支持的币种：代码 → { 符号, 国旗, 中文名 }
      */
     const CURRENCIES = {
-        CNY: '¥',
-        EUR: '€',
-        GBP: '£',
-        JPY: '¥',
-        HKD: 'HK$',
-        SGD: 'S$',
-        KRW: '₩',
-        AUD: 'A$',
-        CAD: 'C$'
+        CNY: { symbol: '¥', flag: '🇨🇳', name: '人民币' },
+        EUR: { symbol: '€', flag: '🇪🇺', name: '欧元' },
+        GBP: { symbol: '£', flag: '🇬🇧', name: '英镑' },
+        JPY: { symbol: '¥', flag: '🇯🇵', name: '日元' },
+        HKD: { symbol: 'HK$', flag: '🇭🇰', name: '港币' },
+        SGD: { symbol: 'S$', flag: '🇸🇬', name: '新加坡元' },
+        KRW: { symbol: '₩', flag: '🇰🇷', name: '韩元' },
+        AUD: { symbol: 'A$', flag: '🇦🇺', name: '澳元' },
+        CAD: { symbol: 'C$', flag: '🇨🇦', name: '加元' }
     };
 
     /**
@@ -70,7 +70,8 @@
      */
     const DEFAULT_SETTINGS = {
         defaultCurrency: 'CNY',
-        popupCurrencies: ['EUR', 'GBP', 'JPY', 'HKD', 'SGD', 'KRW', 'AUD', 'CAD']
+        popupCurrencies: ['EUR', 'GBP', 'JPY', 'HKD', 'SGD', 'KRW', 'AUD', 'CAD'],
+        popupEnabled: true
     };
 
     // 兜底汇率（1 USD 兑各币种）
@@ -86,8 +87,10 @@
         try {
             const dc = GM_getValue('defaultCurrency', DEFAULT_SETTINGS.defaultCurrency);
             const pc = GM_getValue('popupCurrencies', DEFAULT_SETTINGS.popupCurrencies);
+            const pe = GM_getValue('popupEnabled', DEFAULT_SETTINGS.popupEnabled);
             if (dc && CURRENCIES[dc]) SETTINGS.defaultCurrency = dc;
             if (Array.isArray(pc) && pc.length) SETTINGS.popupCurrencies = pc.filter(c => CURRENCIES[c]);
+            if (typeof pe === 'boolean') SETTINGS.popupEnabled = pe;
         } catch (e) {
             /* GM_* 不可用，保持默认 */
         }
@@ -100,6 +103,7 @@
         try {
             GM_setValue('defaultCurrency', SETTINGS.defaultCurrency);
             GM_setValue('popupCurrencies', SETTINGS.popupCurrencies);
+            GM_setValue('popupEnabled', SETTINGS.popupEnabled);
         } catch (e) {
             console.log('[AI 成本换算助手] 设置保存失败');
         }
@@ -150,7 +154,8 @@
         const value = (code === 'JPY' || code === 'KRW')
             ? Math.round(amount).toLocaleString('zh-CN')
             : String(Math.round(amount * 100) / 100);
-        return `${CURRENCIES[code] || ''}${value}`;
+        const info = CURRENCIES[code];
+        return `${info ? info.symbol : ''}${value}`;
     }
 
     /**
@@ -371,21 +376,169 @@
         popupEl.style.cssText = `
             position: fixed;
             z-index: 2147483647;
-            background: #fff;
-            color: #14161a;
-            border: 1px solid #e6e8ec;
-            border-radius: 10px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-            padding: 10px 14px;
+            background: #ffffff;
+            color: #1f2328;
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 12px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.06);
+            padding: 8px;
             font-size: 13px;
-            line-height: 1.8;
             display: none;
-            min-width: 150px;
+            min-width: 180px;
+            user-select: text;
         `;
         popupEl.addEventListener('mouseenter', () => clearTimeout(popupHideTimer));
         popupEl.addEventListener('mouseleave', () => scheduleHidePopup());
         document.body.appendChild(popupEl);
         return popupEl;
+    }
+
+    /**
+     * 注入浮窗/面板统一样式
+     */
+    function injectStyles() {
+        if (document.getElementById('aich-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'aich-styles';
+        style.textContent = `
+            [data-ai-cost-helper-popup] .aich-popup-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 4px 8px;
+                border-radius: 6px;
+                line-height: 1.7;
+            }
+            [data-ai-cost-helper-popup] .aich-popup-row:hover {
+                background: #f3f4f6;
+            }
+            [data-ai-cost-helper-popup] .aich-flag {
+                font-size: 15px;
+                width: 20px;
+                flex-shrink: 0;
+            }
+            [data-ai-cost-helper-popup] .aich-code {
+                color: #6b7280;
+                font-size: 12px;
+                width: 36px;
+                flex-shrink: 0;
+            }
+            [data-ai-cost-helper-popup] .aich-val {
+                margin-left: auto;
+                font-weight: 600;
+                font-variant-numeric: tabular-nums;
+            }
+            [data-ai-cost-helper-popup] .aich-popup-foot {
+                border-top: 1px solid #f0f0f0;
+                margin-top: 4px;
+                padding: 6px 8px 2px;
+                text-align: right;
+                font-size: 12px;
+            }
+            [data-ai-cost-helper-popup] .aich-popup-foot a {
+                color: #6366f1;
+                text-decoration: none;
+            }
+            [data-ai-cost-helper-popup] .aich-popup-foot a:hover {
+                text-decoration: underline;
+            }
+
+            /* 设置面板 */
+            [data-ai-cost-helper-panel] .aich-panel-card {
+                background: #ffffff;
+                border-radius: 14px;
+                box-shadow: 0 20px 48px rgba(0,0,0,0.2), 0 2px 8px rgba(0,0,0,0.08);
+                width: 340px;
+                max-width: 92vw;
+                font-size: 14px;
+                color: #1f2328;
+                overflow: hidden;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-head {
+                padding: 16px 20px 12px;
+                font-size: 16px;
+                font-weight: 700;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-body {
+                padding: 16px 20px;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-field {
+                margin-bottom: 14px;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-field:last-child {
+                margin-bottom: 0;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-label {
+                margin-bottom: 6px;
+                color: #6b7280;
+                font-size: 13px;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-select {
+                width: 100%;
+                padding: 8px 10px;
+                border: 1px solid #d1d5db;
+                border-radius: 8px;
+                font-size: 14px;
+                background: #fff;
+                color: #1f2328;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-checks {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 4px 12px;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-check {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 3px 0;
+                font-size: 13px;
+                cursor: pointer;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-toggle {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 14px;
+                cursor: pointer;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-hint {
+                margin-top: 4px;
+                color: #9ca3af;
+                font-size: 12px;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-foot {
+                display: flex;
+                gap: 8px;
+                justify-content: flex-end;
+                padding: 12px 20px 16px;
+                border-top: 1px solid #f0f0f0;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-btn {
+                padding: 7px 16px;
+                border-radius: 8px;
+                font-size: 14px;
+                cursor: pointer;
+                border: 1px solid transparent;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-btn-ghost {
+                background: #fff;
+                border-color: #d1d5db;
+                color: #1f2328;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-btn-ghost:hover {
+                background: #f9fafb;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-btn-primary {
+                background: #6366f1;
+                color: #fff;
+            }
+            [data-ai-cost-helper-panel] .aich-panel-btn-primary:hover {
+                background: #5457e5;
+            }
+        `;
+        document.head.appendChild(style);
     }
 
     /**
@@ -395,14 +548,14 @@
         const usd = Number(badge.getAttribute('data-usd'));
         if (!usd) return;
         const el = getPopup();
-        const dc = SETTINGS.defaultCurrency;
-        // 浮窗币种 = 默认币种 + 用户勾选，去重
-        const codes = [...new Set([dc, ...SETTINGS.popupCurrencies])];
+        // 浮窗币种 = 用户勾选（默认币种已在 badge 上显示，不重复插入）
+        const codes = SETTINGS.popupCurrencies;
         const rows = codes.map(code => {
             const rate = RATES[code] || FALLBACK_RATES[code];
-            return `<div>${code} ${formatMoney(usd * rate, code)}</div>`;
+            const info = CURRENCIES[code];
+            return `<div class="aich-popup-row"><span class="aich-flag">${info ? info.flag : ''}</span><span class="aich-code">${code}</span><span class="aich-val">${formatMoney(usd * rate, code)}</span></div>`;
         });
-        rows.push(`<div style="border-top:1px solid #eee;margin-top:6px;padding-top:6px;font-size:12px"><a href="javascript:void(0)" data-popup-settings style="color:#6366f1;text-decoration:none">设置</a></div>`);
+        rows.push(`<div class="aich-popup-foot"><a href="javascript:void(0)" data-popup-settings>设置</a></div>`);
         el.innerHTML = rows.join('');
         el.style.display = 'block';
         positionPopup(badge, el);
@@ -430,6 +583,7 @@
     }
 
     function showPopup(badge) {
+        if (!SETTINGS.popupEnabled) return;
         clearTimeout(popupHideTimer);
         if (activeBadge !== badge) {
             activeBadge = badge;
@@ -444,8 +598,15 @@
         if (popupEl) popupEl.style.display = 'none';
     }
 
+    /**
+     * 延迟隐藏浮窗；若正在拖拽选中文本则不关闭（方便复制）
+     */
     function scheduleHidePopup() {
         clearTimeout(popupHideTimer);
+        try {
+            const sel = window.getSelection();
+            if (sel && sel.toString()) return;
+        } catch (e) { /* ignore */ }
         popupHideTimer = setTimeout(hidePopup, 300);
     }
 
@@ -487,26 +648,38 @@
     function buildPanelHTML() {
         const dc = SETTINGS.defaultCurrency;
         const popup = SETTINGS.popupCurrencies;
-        const codeOptions = Object.keys(CURRENCIES).map(code =>
-            `<option value="${code}" ${code === dc ? 'selected' : ''}>${code} (${CURRENCIES[code]})</option>`
-        ).join('');
-        const checks = Object.keys(CURRENCIES).map(code =>
-            `<label style="display:block"><input type="checkbox" value="${code}" ${popup.includes(code) ? 'checked' : ''}> ${code} (${CURRENCIES[code]})</label>`
-        ).join('');
+        const enabled = SETTINGS.popupEnabled;
+        const codeOptions = Object.keys(CURRENCIES).map(code => {
+            const info = CURRENCIES[code];
+            return `<option value="${code}" ${code === dc ? 'selected' : ''}>${info.flag} ${code} · ${info.name}</option>`;
+        }).join('');
+        const checks = Object.keys(CURRENCIES).map(code => {
+            const info = CURRENCIES[code];
+            return `<label class="aich-panel-check"><input type="checkbox" value="${code}" ${popup.includes(code) ? 'checked' : ''}> ${info.flag} ${code} · ${info.name}</label>`;
+        }).join('');
         return `
-            <div style="background:#fff;border-radius:12px;padding:20px;width:320px;max-width:90vw;font-size:14px;color:#14161a">
-                <h3 style="margin:0 0 14px;font-size:16px">AI 成本换算助手 · 设置</h3>
-                <div style="margin-bottom:12px">
-                    <div style="margin-bottom:4px">默认币种</div>
-                    <select data-panel-default style="padding:6px;border:1px solid #d0d3d8;border-radius:6px">${codeOptions}</select>
+            <div class="aich-panel-card">
+                <div class="aich-panel-head">AI 成本换算助手 · 设置</div>
+                <div class="aich-panel-body">
+                    <div class="aich-panel-field">
+                        <div class="aich-panel-label">默认币种</div>
+                        <select data-panel-default class="aich-panel-select">${codeOptions}</select>
+                    </div>
+                    <div class="aich-panel-field">
+                        <label class="aich-panel-toggle">
+                            <input type="checkbox" data-panel-enabled ${enabled ? 'checked' : ''}>
+                            <span>启用浮窗显示</span>
+                        </label>
+                        <div class="aich-panel-hint">关闭后悬停不再弹出多币种浮窗</div>
+                    </div>
+                    <div class="aich-panel-field">
+                        <div class="aich-panel-label">浮窗展示币种</div>
+                        <div data-panel-popup class="aich-panel-checks">${checks}</div>
+                    </div>
                 </div>
-                <div style="margin-bottom:16px">
-                    <div style="margin-bottom:4px">浮窗展示币种</div>
-                    <div data-panel-popup>${checks}</div>
-                </div>
-                <div style="display:flex;gap:8px;justify-content:flex-end">
-                    <button data-panel-cancel style="padding:6px 14px;border:1px solid #d0d3d8;border-radius:8px;background:#fff;cursor:pointer">取消</button>
-                    <button data-panel-save style="padding:6px 14px;border:none;border-radius:8px;background:#6366f1;color:#fff;cursor:pointer">保存</button>
+                <div class="aich-panel-foot">
+                    <button data-panel-cancel class="aich-panel-btn aich-panel-btn-ghost">取消</button>
+                    <button data-panel-save class="aich-panel-btn aich-panel-btn-primary">保存</button>
                 </div>
             </div>
         `;
@@ -516,9 +689,11 @@
         const panel = getPanel();
         SETTINGS.defaultCurrency = panel.querySelector('[data-panel-default]').value;
         SETTINGS.popupCurrencies = [...panel.querySelectorAll('[data-panel-popup] input:checked')].map(i => i.value);
+        SETTINGS.popupEnabled = panel.querySelector('[data-panel-enabled]').checked;
         saveSettings();
         closeSettingsPanel();
         refreshBadges();
+        if (!SETTINGS.popupEnabled) hidePopup();
     }
 
     /**
@@ -551,12 +726,18 @@
         document.addEventListener('click', (e) => {
             const badge = e.target.closest ? e.target.closest(`[${FLAG}]`) : null;
             const inPopup = e.target.closest ? e.target.closest('[data-ai-cost-helper-popup]') : null;
+            // 正在选中文本时（拖拽复制）不关闭浮窗
+            let selecting = false;
+            try {
+                const sel = window.getSelection();
+                selecting = !!sel && !!sel.toString();
+            } catch (err) { /* ignore */ }
             if (badge && badge.hasAttribute('data-usd')) {
                 const el = getPopup();
-                if (el.style.display === 'block') hidePopup();
+                if (el.style.display === 'block' && !selecting) hidePopup();
                 else showPopup(badge);
                 e.preventDefault();
-            } else if (!inPopup) {
+            } else if (!inPopup && !selecting) {
                 hidePopup();
             }
         });
@@ -569,6 +750,7 @@
      */
     function start() {
         loadSettings();
+        injectStyles();
         bindPopupEvents();
         scan();
 
