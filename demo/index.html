@@ -739,7 +739,7 @@
                 if (simPopupEl) return simPopupEl;
                 simPopupEl = document.createElement('div');
                 simPopupEl.className = 'sim-popup';
-                simPopupEl.style.cssText = 'position:fixed;z-index:2147483647;background:#fff;color:#1f2328;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.16);padding:8px;font-size:13px;display:none;min-width:180px;user-select:text;';
+                simPopupEl.style.cssText = 'position:absolute;z-index:2147483647;background:#fff;color:#1f2328;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.16);padding:8px;font-size:13px;display:none;min-width:180px;user-select:text;';
                 document.body.appendChild(simPopupEl);
                 return simPopupEl;
             }
@@ -747,24 +747,28 @@
             function showSimPopup(badge) {
                 if (!simPopupEnabled) return;
                 clearTimeout(simHideTimer);
-                const usd = Number(badge.getAttribute('data-usd'));
-                if (!usd) return;
                 const el = getSimPopup();
                 if (simActiveBadge === badge) { el.style.display = 'block'; return; }
                 simActiveBadge = badge;
                 const codes = simPopup;
                 const rows = codes.map(c => {
                     const info = SIM_CURRENCIES[c];
-                    return '<div class="sim-row"><span class="sim-flag">' + (info ? info.flag : '') + '</span><span class="sim-code">' + c + '</span><span class="sim-val">' + formatMoney(usd * (SIM_RATES[c] || SIM_RATES.CNY), c) + '</span></div>';
+                    return '<div class="sim-row"><span class="sim-flag">' + (info ? info.flag : '') + '</span><span class="sim-code">' + c + '</span><span class="sim-val">1 USD ≈ ' + formatMoney(SIM_RATES[c] || SIM_RATES.CNY, c) + '</span></div>';
                 });
-                rows.push('<div class="sim-foot">演示浮窗 · 悬停可复制</div>');
+                rows.push('<div class="sim-foot">演示浮窗 · 展示汇率，悬停可复制</div>');
                 el.innerHTML = rows.join('');
                 el.style.display = 'block';
+                // absolute + 文档坐标定位
                 const r = badge.getBoundingClientRect();
-                el.style.left = Math.max(4, Math.min(r.left, window.innerWidth - el.offsetWidth - 8)) + 'px';
-                el.style.top = (r.bottom + 6 + el.offsetHeight > window.innerHeight)
-                    ? Math.max(4, r.top - el.offsetHeight - 6) + 'px'
-                    : (r.bottom + 6) + 'px';
+                const scrollY = window.scrollY || document.documentElement.scrollTop;
+                const scrollX = window.scrollX || document.documentElement.scrollLeft;
+                const left = r.left + scrollX;
+                const top = r.bottom + scrollY + 6;
+                const docW = document.documentElement.clientWidth;
+                el.style.left = Math.max(0, (left + el.offsetWidth > docW) ? (r.right + scrollX - el.offsetWidth) : left) + 'px';
+                el.style.top = (top + el.offsetHeight > scrollY + window.innerHeight)
+                    ? Math.max(0, r.top + scrollY - el.offsetHeight - 6) + 'px'
+                    : top + 'px';
             }
 
             function hideSimPopup() {
@@ -776,13 +780,32 @@
                 try { const s = window.getSelection(); return !!s && !!s.toString(); } catch (e) { return false; }
             }
 
+            function simReposition() {
+                if (!simPopupEl || simPopupEl.style.display !== 'block' || !simActiveBadge) return;
+                if (!simActiveBadge.isConnected) { hideSimPopup(); return; }
+                const r = simActiveBadge.getBoundingClientRect();
+                if (r.bottom < 0 || r.top > window.innerHeight) { hideSimPopup(); return; }
+                const scrollY = window.scrollY || document.documentElement.scrollTop;
+                const scrollX = window.scrollX || document.documentElement.scrollLeft;
+                const left = r.left + scrollX;
+                const top = r.bottom + scrollY + 6;
+                const docW = document.documentElement.clientWidth;
+                simPopupEl.style.left = Math.max(0, (left + simPopupEl.offsetWidth > docW) ? (r.right + scrollX - simPopupEl.offsetWidth) : left) + 'px';
+                simPopupEl.style.top = (top + simPopupEl.offsetHeight > scrollY + window.innerHeight)
+                    ? Math.max(0, r.top + scrollY - simPopupEl.offsetHeight - 6) + 'px'
+                    : top + 'px';
+            }
+
             document.addEventListener('mouseover', (e) => {
                 const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
                 if (badge && badge.hasAttribute('data-usd')) showSimPopup(badge);
             });
             document.addEventListener('mouseout', (e) => {
-                const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
-                if (!badge && !simSelecting()) simHideTimer = setTimeout(hideSimPopup, 300);
+                const to = e.relatedTarget;
+                const toPopup = to && to.closest ? to.closest('.sim-popup') : null;
+                const toBadge = to && to.closest ? to.closest('[' + FLAG + ']') : null;
+                if (toPopup || toBadge) return;
+                if (!simSelecting()) simHideTimer = setTimeout(hideSimPopup, 300);
             });
             document.addEventListener('click', (e) => {
                 const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
@@ -794,6 +817,8 @@
                     hideSimPopup();
                 }
             });
+            window.addEventListener('scroll', simReposition, true);
+            window.addEventListener('resize', simReposition);
 
             const toggle = document.getElementById('simToggle');
             toggle.addEventListener('change', function () {

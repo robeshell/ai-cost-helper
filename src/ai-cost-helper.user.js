@@ -4,7 +4,7 @@
 // @name:zh-TW   AI 成本換算助手
 // @name:en      AI Cost Helper
 // @namespace    https://github.com/robeshell/ai-cost-helper
-// @version      1.3.0
+// @version      1.3.1
 // @description  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-CN  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-TW  自動將網頁中的美元價格轉換為人民幣顯示，懸停查看多幣種換算，方便查看 AI API、模型調用和海外服務成本
@@ -373,8 +373,9 @@
         if (popupEl) return popupEl;
         popupEl = document.createElement('div');
         popupEl.setAttribute('data-ai-cost-helper-popup', 'true');
+        // 用 absolute + 文档坐标定位，避免页面存在 transform 容器时 fixed 错位
         popupEl.style.cssText = `
-            position: fixed;
+            position: absolute;
             z-index: 2147483647;
             background: #ffffff;
             color: #1f2328;
@@ -427,6 +428,7 @@
                 margin-left: auto;
                 font-weight: 600;
                 font-variant-numeric: tabular-nums;
+                color: #1f2328;
             }
             [data-ai-cost-helper-popup] .aich-popup-foot {
                 border-top: 1px solid #f0f0f0;
@@ -542,23 +544,21 @@
     }
 
     /**
-     * 渲染浮窗内容
+     * 渲染浮窗内容（展示汇率表，不做当前价格换算）
      */
-    function renderPopup(badge) {
-        const usd = Number(badge.getAttribute('data-usd'));
-        if (!usd) return;
+    function renderPopup() {
         const el = getPopup();
         // 浮窗币种 = 用户勾选（默认币种已在 badge 上显示，不重复插入）
         const codes = SETTINGS.popupCurrencies;
         const rows = codes.map(code => {
             const rate = RATES[code] || FALLBACK_RATES[code];
             const info = CURRENCIES[code];
-            return `<div class="aich-popup-row"><span class="aich-flag">${info ? info.flag : ''}</span><span class="aich-code">${code}</span><span class="aich-val">${formatMoney(usd * rate, code)}</span></div>`;
+            return `<div class="aich-popup-row"><span class="aich-flag">${info ? info.flag : ''}</span><span class="aich-code">${code}</span><span class="aich-val">1 USD ≈ ${formatMoney(rate, code)}</span></div>`;
         });
         rows.push(`<div class="aich-popup-foot"><a href="javascript:void(0)" data-popup-settings>设置</a></div>`);
         el.innerHTML = rows.join('');
         el.style.display = 'block';
-        positionPopup(badge, el);
+        positionPopup(el);
         const link = el.querySelector('[data-popup-settings]');
         if (link) link.addEventListener('click', (e) => {
             e.preventDefault();
@@ -568,17 +568,26 @@
     }
 
     /**
-     * 浮窗定位（badge 下方，越界自动翻转）
+     * 浮窗定位（absolute + 文档坐标，badge 下方，越界自动翻转）
      */
-    function positionPopup(badge, el) {
-        const r = badge.getBoundingClientRect();
-        const left = Math.min(r.left, window.innerWidth - el.offsetWidth - 8);
-        const bottom = r.bottom + 6 + el.offsetHeight;
-        el.style.left = Math.max(4, left) + 'px';
-        if (bottom > window.innerHeight) {
-            el.style.top = Math.max(4, r.top - el.offsetHeight - 6) + 'px';
+    function positionPopup(el) {
+        if (!activeBadge) return;
+        const r = activeBadge.getBoundingClientRect();
+        const scrollY = window.scrollY || document.documentElement.scrollTop;
+        const scrollX = window.scrollX || document.documentElement.scrollLeft;
+        const left = r.left + scrollX;
+        const top = r.bottom + scrollY + 6;
+        // 水平越界：靠右对齐
+        const docWidth = document.documentElement.clientWidth;
+        const finalLeft = (left + el.offsetWidth > docWidth)
+            ? Math.max(0, r.right + scrollX - el.offsetWidth)
+            : left;
+        el.style.left = Math.max(0, finalLeft) + 'px';
+        // 垂直越界：翻转到 badge 上方
+        if (top + el.offsetHeight > scrollY + window.innerHeight) {
+            el.style.top = Math.max(0, r.top + scrollY - el.offsetHeight - 6) + 'px';
         } else {
-            el.style.top = (r.bottom + 6) + 'px';
+            el.style.top = top + 'px';
         }
     }
 
@@ -587,9 +596,11 @@
         clearTimeout(popupHideTimer);
         if (activeBadge !== badge) {
             activeBadge = badge;
-            renderPopup(badge);
+            renderPopup();
         } else {
-            getPopup().style.display = 'block';
+            const el = getPopup();
+            el.style.display = 'block';
+            positionPopup(el);
         }
     }
 
@@ -608,6 +619,23 @@
             if (sel && sel.toString()) return;
         } catch (e) { /* ignore */ }
         popupHideTimer = setTimeout(hidePopup, 300);
+    }
+
+    /**
+     * 滚动/缩放时跟随 badge 重新定位，badge 滚出视口才关闭
+     */
+    function repositionPopup() {
+        if (!popupEl || popupEl.style.display !== 'block' || !activeBadge) return;
+        if (!activeBadge.isConnected) {
+            hidePopup();
+            return;
+        }
+        const r = activeBadge.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) {
+            hidePopup();
+            return;
+        }
+        positionPopup(popupEl);
     }
 
     // ===== 设置面板 =====
@@ -719,9 +747,12 @@
             if (badge && badge.hasAttribute('data-usd')) showPopup(badge);
         });
         document.addEventListener('mouseout', (e) => {
-            const badge = e.target.closest ? e.target.closest(`[${FLAG}]`) : null;
-            const inPopup = e.target.closest ? e.target.closest('[data-ai-cost-helper-popup]') : null;
-            if (!badge && !inPopup) scheduleHidePopup();
+            const to = e.relatedTarget;
+            // 鼠标移入浮窗或另一个 badge 时不隐藏
+            const toPopup = to && to.closest ? to.closest('[data-ai-cost-helper-popup]') : null;
+            const toBadge = to && to.closest ? to.closest(`[${FLAG}]`) : null;
+            if (toPopup || toBadge) return;
+            scheduleHidePopup();
         });
         document.addEventListener('click', (e) => {
             const badge = e.target.closest ? e.target.closest(`[${FLAG}]`) : null;
@@ -741,8 +772,9 @@
                 hidePopup();
             }
         });
-        window.addEventListener('scroll', hidePopup, true);
-        window.addEventListener('resize', hidePopup);
+        // 滚动/缩放跟随 badge 重新定位，而不是直接关闭
+        window.addEventListener('scroll', repositionPopup, true);
+        window.addEventListener('resize', repositionPopup);
     }
 
     /**
