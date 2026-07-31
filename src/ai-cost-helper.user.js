@@ -4,7 +4,7 @@
 // @name:zh-TW   AI 成本換算助手
 // @name:en      AI Cost Helper
 // @namespace    https://github.com/robeshell/ai-cost-helper
-// @version      1.4.0
+// @version      1.4.1
 // @description  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-CN  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-TW  自動將網頁中的美元價格轉換為人民幣顯示，懸停查看多幣種換算，方便查看 AI API、模型調用和海外服務成本
@@ -295,6 +295,108 @@
     }
 
     /**
+     * 内联元素标签集（用于跨元素识别被拆分的美元价格，如 `$` 与数字分处两个 span）
+     */
+    const INLINE_TAGS = new Set([
+        'SPAN', 'A', 'B', 'STRONG', 'I', 'EM', 'U', 'SMALL', 'MARK',
+        'ABBR', 'CITE', 'Q', 'SUB', 'SUP', 'LABEL', 'BDI', 'BDO',
+        'S', 'DEL', 'INS', 'TIME', 'FONT', 'BIG', 'TT', 'KBD', 'SAMP', 'VAR'
+    ]);
+
+    function isInline(el) {
+        return !!el && el.nodeType === 1 && INLINE_TAGS.has(el.tagName);
+    }
+
+    /**
+     * 沿文档顺序取相邻文本节点，仅跨越内联元素，遇块级边界或非空白文本则停。
+     * 用于把分处不同节点的 `$` 与数字拼回一个价格。
+     * @param {Text} node 起点文本节点
+     * @param {'next'|'prev'} dir 方向
+     */
+    function adjacentText(node, dir) {
+        let current = node;
+        while (current) {
+            let sib = dir === 'next' ? current.nextSibling : current.previousSibling;
+            // 跳过纯空白文本节点
+            while (sib && sib.nodeType === 3 && /^\s*$/.test(sib.nodeValue)) {
+                current = sib;
+                sib = dir === 'next' ? current.nextSibling : current.previousSibling;
+            }
+            if (sib) {
+                if (sib.nodeType === 3) return sib; // 非空白文本
+                if (sib.nodeType === 1) {
+                    if (!isInline(sib)) return null; // 块级边界
+                    const tw = document.createTreeWalker(sib, NodeFilter.SHOW_TEXT);
+                    if (dir === 'next') {
+                        const n = tw.nextNode();
+                        if (n) return n;
+                    } else {
+                        let last = null;
+                        while (tw.nextNode()) last = tw.currentNode;
+                        if (last) return last;
+                    }
+                    // 无文本的内联元素（如仅含图片），跨过它继续
+                    current = sib;
+                    continue;
+                }
+                return null;
+            }
+            // 无兄弟节点：若父级是内联元素则上移继续找
+            const parent = current.parentNode;
+            if (parent && parent.nodeType === 1 && isInline(parent)) {
+                current = parent;
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 在数字节点后插入或更新拆分价格的换算 badge
+     */
+    function upsertSplitBadge(numberNode, usd) {
+        const dc = SETTINGS.defaultCurrency;
+        const rate = RATES[dc] || FALLBACK_RATES[dc];
+        const existing = numberNode.nextSibling;
+        if (existing && existing.nodeType === 1 && existing.hasAttribute('data-ai-cost-helper')) {
+            // 已有 badge：若是 USD badge 则更新金额（价格随 characterData 变化时）
+            if (existing.hasAttribute('data-usd')) {
+                existing.setAttribute('data-usd', String(usd));
+                existing.textContent = `≈ ${formatMoney(usd * rate, dc)}`;
+                existing.title = `汇率 USD/${dc}=${rate.toFixed(2)}`;
+            }
+            return;
+        }
+        const badge = createBadge(`≈ ${formatMoney(usd * rate, dc)}`, `汇率 USD/${dc}=${rate.toFixed(2)}`, usd);
+        numberNode.parentNode.insertBefore(badge, numberNode.nextSibling);
+    }
+
+    /**
+     * 处理 `$` 与数字被拆到不同节点的情况（常见于把货币符号单独着色的表格）。
+     * 当前节点为「孤立的 $」或「纯数字且前置相邻为 $」时，把换算 badge 插到数字节点之后。
+     */
+    function trySplitPrice(node) {
+        const text = node.nodeValue;
+        let numberNode, usd;
+        if (/^\s*\$\s*$/.test(text)) {
+            const nt = adjacentText(node, 'next');
+            if (!nt || !/^\s*[\d,]+(?:\.\d+)?\s*$/.test(nt.nodeValue)) return;
+            numberNode = nt;
+            usd = Number(nt.nodeValue.replace(/,/g, ''));
+        } else if (/^\s*[\d,]+(?:\.\d+)?\s*$/.test(text)) {
+            const pt = adjacentText(node, 'prev');
+            if (!pt || !/^\s*\$\s*$/.test(pt.nodeValue)) return;
+            numberNode = node;
+            usd = Number(text.replace(/,/g, ''));
+        } else {
+            return;
+        }
+        if (!isFinite(usd) || usd <= 0) return;
+        upsertSplitBadge(numberNode, usd);
+    }
+
+    /**
      * 处理单个文本节点
      */
     function processNode(node) {
@@ -333,7 +435,11 @@
             })))
             .sort((a, b) => a.start - b.start);
 
-        if (matches.length === 0) return;
+        if (matches.length === 0) {
+            // 未匹配到完整价格时，尝试 `$` 与数字被拆分到不同节点的情况
+            trySplitPrice(node);
+            return;
+        }
 
         // 当匹配重叠时（如 $2.4B：美元 $2.4 与大数 2.4B），保留覆盖更完整的那个
         const kept = [];
