@@ -406,7 +406,7 @@
         <header class="hero">
             <span class="hero-kicker"><span class="dot"></span>演示页 · demo</span>
             <h1>AI 成本换算助手</h1>
-            <p class="sub">自动把网页里的美元价格换算成人民币，刷一眼就知道 API 调用和海外服务到底要花多少钱。</p>
+            <p class="sub">自动把网页里的美元价格换算成人民币、把 K/M/B 大数换算成中文读数，刷一眼就知道 API 调用和海外服务到底要花多少钱。</p>
             <div class="hero-actions">
                 <a class="btn btn-primary" href="https://github.com/robeshell/ai-cost-helper/releases/latest/download/ai-cost-helper.user.js">
                     安装脚本
@@ -422,7 +422,7 @@
             <div class="feature">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20"/><path d="M12 2v20"/><circle cx="12" cy="12" r="9"/></svg>
                 <h3>自动识别</h3>
-                <p>扫描页面文本，在每个美元价格后追加人民币换算，动态内容也能捕捉。</p>
+                <p>扫描页面文本，美元价格换成人民币、K/M/B 大数换成中文读数，动态内容也能捕捉。</p>
             </div>
             <div class="feature">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
@@ -510,6 +510,34 @@
             </div>
         </section>
 
+        <!-- Usage numbers demo -->
+        <section class="section">
+            <div class="section-head">
+                <div>
+                    <span class="kicker">Big numbers</span>
+                    <h2>用量数据示例</h2>
+                </div>
+            </div>
+            <div class="card samples">
+                <div class="sample">
+                    <span class="desc">Tokens 消耗 <strong>122.8M</strong></span>
+                    <span class="price">122.8M</span>
+                </div>
+                <div class="sample">
+                    <span class="desc">API 请求 <strong>1.6K</strong> 次</span>
+                    <span class="price">1.6K</span>
+                </div>
+                <div class="sample">
+                    <span class="desc">年度预算 <strong>$2.4B</strong>（同时演示美元+大数换算）</span>
+                    <span class="price">$2.4B</span>
+                </div>
+                <div class="sample">
+                    <span class="desc">累计消耗 <strong>122,800,000</strong> tokens（千分位数字）</span>
+                    <span class="price">122,800,000</span>
+                </div>
+            </div>
+        </section>
+
         <footer class="footer">
             <span>MIT License · 不收集任何数据</span>
             <div class="footer-links">
@@ -529,22 +557,53 @@
             const SIM_RATE = 7.24; // 模拟汇率
 
             function parseUSD(text) {
-                const regex = /\$(\d+(?:\.\d+)?)/g;
+                const regex = /\$((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g;
                 const result = [];
                 let m;
                 while ((m = regex.exec(text))) {
-                    result.push({ start: m.index, end: regex.lastIndex, value: Number(m[1]) });
+                    result.push({ start: m.index, end: regex.lastIndex, value: Number(m[1].replace(/,/g, '')) });
                 }
                 return result;
             }
 
-            function createBadge(value) {
+            const UNIT_MULTIPLIERS = { K: 1e3, M: 1e6, B: 1e9, T: 1e12 };
+
+            function parseUnits(text) {
+                const regex = /\b((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)([KMBT])\b/g;
+                const result = [];
+                let m;
+                while ((m = regex.exec(text))) {
+                    result.push({ start: m.index, end: regex.lastIndex, value: Number(m[1].replace(/,/g, '')) * UNIT_MULTIPLIERS[m[2]] });
+                }
+                return result;
+            }
+
+            function parseComma(text) {
+                const regex = /(?<![\d,$])(\d{1,3}(?:,\d{3})+)(?:\.\d+)?(?![\d,])/g;
+                const result = [];
+                let m;
+                while ((m = regex.exec(text))) {
+                    const value = Number(m[1].replace(/,/g, ''));
+                    if (value >= 1e4) result.push({ start: m.index, end: regex.lastIndex, value });
+                }
+                return result;
+            }
+
+            function formatChinese(n) {
+                let value, suffix = '';
+                if (n >= 1e8) { value = n / 1e8; suffix = '亿'; }
+                else if (n >= 1e4) { value = n / 1e4; suffix = '万'; }
+                else return String(Math.round(n));
+                return String(Math.round(value * 10) / 10) + suffix;
+            }
+
+            function createBadge(text, title) {
                 const span = document.createElement('span');
                 span.className = 'badge';
-                span.textContent = '≈ ¥' + (value * SIM_RATE).toFixed(2);
+                span.textContent = text;
                 span.setAttribute(FLAG, 'true');
                 span.setAttribute(SIM, 'true');
-                span.title = '汇率 USD/CNY=' + SIM_RATE.toFixed(2);
+                span.title = title;
                 return span;
             }
 
@@ -559,16 +618,46 @@
                     if (parent.closest('code, pre, script, style, textarea, input')) continue;
                     if (parent.querySelector('[' + FLAG + ']')) continue;
                     const text = node.nodeValue;
-                    if (!text.includes('$')) continue;
-                    const items = parseUSD(text);
-                    if (!items.length) continue;
 
-                    const item = items[0];
+                    const matches = parseUSD(text).map(m => {
+                        const rmb = m.value * SIM_RATE;
+                        return {
+                            ...m,
+                            badge: '≈ ¥' + (rmb >= 1e4 ? formatChinese(rmb) : rmb.toFixed(2)),
+                            title: '汇率 USD/CNY=' + SIM_RATE.toFixed(2)
+                        };
+                    }).concat(parseUnits(text).map(m => ({
+                        ...m,
+                        badge: '≈ ' + formatChinese(m.value),
+                        title: m.value.toLocaleString('zh-CN')
+                    }))).concat(parseComma(text).map(m => ({
+                        ...m,
+                        badge: '≈ ' + formatChinese(m.value),
+                        title: m.value.toLocaleString('zh-CN')
+                    }))).sort((a, b) => a.start - b.start);
+
+                    if (!matches.length) continue;
+
+                    // 匹配重叠时（如 $2.4B），保留覆盖更完整的那个
+                    const kept = [];
+                    for (const item of matches) {
+                        const last = kept[kept.length - 1];
+                        if (last && item.start < last.end) {
+                            if (item.end > last.end) kept[kept.length - 1] = item;
+                        } else {
+                            kept.push(item);
+                        }
+                    }
+
                     const frag = document.createDocumentFragment();
-                    if (item.start > 0) frag.appendChild(document.createTextNode(text.substring(0, item.start)));
-                    frag.appendChild(document.createTextNode(text.substring(item.start, item.end)));
-                    frag.appendChild(createBadge(item.value));
-                    if (item.end < text.length) frag.appendChild(document.createTextNode(text.substring(item.end)));
+                    let cursor = 0;
+                    for (const item of kept) {
+                        if (item.start > cursor) frag.appendChild(document.createTextNode(text.substring(cursor, item.start)));
+                        frag.appendChild(document.createTextNode(text.substring(item.start, item.end)));
+                        frag.appendChild(createBadge(item.badge, item.title));
+                        cursor = item.end;
+                    }
+                    if (cursor < text.length) frag.appendChild(document.createTextNode(text.substring(cursor)));
                     node.replaceWith(frag);
                 }
             }
