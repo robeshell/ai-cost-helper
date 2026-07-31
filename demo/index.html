@@ -675,7 +675,7 @@
                 for (const node of nodes) {
                     const parent = node.parentElement;
                     if (!parent) continue;
-                    if (parent.closest('code, pre, script, style, textarea, input')) continue;
+                    if (parent.closest('code, pre, script, style, textarea, input, .sim-popup')) continue;
                     if (parent.querySelector('[' + FLAG + ']')) continue;
                     const text = node.nodeValue;
 
@@ -734,6 +734,7 @@
             let simPopupEl = null;
             let simHideTimer = null;
             let simActiveBadge = null;
+            let simSelectingText = false;
 
             function getSimPopup() {
                 if (simPopupEl) return simPopupEl;
@@ -745,15 +746,16 @@
             }
 
             function showSimPopup(badge) {
-                if (!simPopupEnabled) return;
+                if (!simPopupEnabled || simSelectingText) return;
                 clearTimeout(simHideTimer);
                 const el = getSimPopup();
                 if (simActiveBadge === badge) { el.style.display = 'block'; return; }
                 simActiveBadge = badge;
-                const codes = simPopup;
+                const codes = [simDefault, ...simPopup].filter((c, i, all) => all.indexOf(c) === i);
+                const usd = Number(badge.getAttribute('data-usd')) || 0;
                 const rows = codes.map(c => {
                     const info = SIM_CURRENCIES[c];
-                    return '<div class="sim-row"><span class="sim-flag">' + (info ? info.flag : '') + '</span><span class="sim-code">' + c + '</span><span class="sim-val">1 USD ≈ ' + formatMoney(SIM_RATES[c] || SIM_RATES.CNY, c) + '</span></div>';
+                    return '<div class="sim-row"><span class="sim-flag">' + (info ? info.flag : '') + '</span><span class="sim-code">' + c + '</span><span class="sim-val">' + formatMoney(usd * (SIM_RATES[c] || SIM_RATES.CNY), c) + '</span></div>';
                 });
                 rows.push('<div class="sim-foot">演示浮窗 · 展示汇率，悬停可复制</div>');
                 el.innerHTML = rows.join('');
@@ -762,10 +764,11 @@
                 const r = badge.getBoundingClientRect();
                 const scrollY = window.scrollY || document.documentElement.scrollTop;
                 const scrollX = window.scrollX || document.documentElement.scrollLeft;
-                const left = r.left + scrollX;
                 const top = r.bottom + scrollY + 6;
-                const docW = document.documentElement.clientWidth;
-                el.style.left = Math.max(0, (left + el.offsetWidth > docW) ? (r.right + scrollX - el.offsetWidth) : left) + 'px';
+                const viewportRight = scrollX + document.documentElement.clientWidth;
+                const desiredLeft = r.left + scrollX;
+                const maxLeft = Math.max(scrollX, viewportRight - el.offsetWidth);
+                el.style.left = Math.max(scrollX, Math.min(desiredLeft, maxLeft)) + 'px';
                 el.style.top = (top + el.offsetHeight > scrollY + window.innerHeight)
                     ? Math.max(0, r.top + scrollY - el.offsetHeight - 6) + 'px'
                     : top + 'px';
@@ -781,16 +784,17 @@
             }
 
             function simReposition() {
-                if (!simPopupEl || simPopupEl.style.display !== 'block' || !simActiveBadge) return;
+                if (simSelectingText || !simPopupEl || simPopupEl.style.display !== 'block' || !simActiveBadge) return;
                 if (!simActiveBadge.isConnected) { hideSimPopup(); return; }
                 const r = simActiveBadge.getBoundingClientRect();
                 if (r.bottom < 0 || r.top > window.innerHeight) { hideSimPopup(); return; }
                 const scrollY = window.scrollY || document.documentElement.scrollTop;
                 const scrollX = window.scrollX || document.documentElement.scrollLeft;
-                const left = r.left + scrollX;
                 const top = r.bottom + scrollY + 6;
-                const docW = document.documentElement.clientWidth;
-                simPopupEl.style.left = Math.max(0, (left + simPopupEl.offsetWidth > docW) ? (r.right + scrollX - simPopupEl.offsetWidth) : left) + 'px';
+                const viewportRight = scrollX + document.documentElement.clientWidth;
+                const desiredLeft = r.left + scrollX;
+                const maxLeft = Math.max(scrollX, viewportRight - simPopupEl.offsetWidth);
+                simPopupEl.style.left = Math.max(scrollX, Math.min(desiredLeft, maxLeft)) + 'px';
                 simPopupEl.style.top = (top + simPopupEl.offsetHeight > scrollY + window.innerHeight)
                     ? Math.max(0, r.top + scrollY - simPopupEl.offsetHeight - 6) + 'px'
                     : top + 'px';
@@ -798,7 +802,8 @@
 
             document.addEventListener('mouseover', (e) => {
                 const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
-                if (badge && badge.hasAttribute('data-usd')) showSimPopup(badge);
+                const from = e.relatedTarget;
+                if (badge && badge.hasAttribute('data-usd') && (!from || !badge.contains(from))) showSimPopup(badge);
             });
             document.addEventListener('mouseout', (e) => {
                 const to = e.relatedTarget;
@@ -810,12 +815,23 @@
             document.addEventListener('click', (e) => {
                 const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
                 const inPopup = e.target.closest ? e.target.closest('.sim-popup') : null;
+                const selecting = simSelecting() || simSelectingText;
                 if (badge && badge.hasAttribute('data-usd')) {
-                    if (simPopupEl && simPopupEl.style.display === 'block' && !simSelecting()) hideSimPopup();
+                    if (simPopupEl && simPopupEl.style.display === 'block' && !selecting) hideSimPopup();
                     else showSimPopup(badge);
-                } else if (!inPopup && !simSelecting()) {
+                } else if (!inPopup && !selecting) {
                     hideSimPopup();
                 }
+            });
+            document.addEventListener('mouseup', () => {
+                if (!simSelectingText) return;
+                simSelectingText = false;
+                if (simPopupEl && simPopupEl.style.display === 'block' && simActiveBadge) showSimPopup(simActiveBadge);
+            });
+            document.addEventListener('selectstart', () => { simSelectingText = true; });
+            document.addEventListener('selectionchange', () => {
+                const sel = window.getSelection();
+                if (!sel || sel.isCollapsed) simSelectingText = false;
             });
             window.addEventListener('scroll', simReposition, true);
             window.addEventListener('resize', simReposition);

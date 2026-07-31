@@ -193,7 +193,8 @@
             script,
             style,
             textarea,
-            input
+            input,
+            [data-ai-cost-helper-popup]
         `);
     }
 
@@ -368,6 +369,7 @@
     let popupEl = null;
     let popupHideTimer = null;
     let activeBadge = null;
+    let selectingText = false;
 
     function getPopup() {
         if (popupEl) return popupEl;
@@ -544,16 +546,17 @@
     }
 
     /**
-     * 渲染浮窗内容（展示汇率表，不做当前价格换算）
+     * 渲染浮窗内容（展示当前金额的多币种换算）
      */
     function renderPopup() {
         const el = getPopup();
-        // 浮窗币种 = 用户勾选（默认币种已在 badge 上显示，不重复插入）
-        const codes = SETTINGS.popupCurrencies;
+        const usd = Number(activeBadge && activeBadge.getAttribute('data-usd'));
+        const codes = [SETTINGS.defaultCurrency, ...SETTINGS.popupCurrencies]
+            .filter((code, index, all) => all.indexOf(code) === index);
         const rows = codes.map(code => {
             const rate = RATES[code] || FALLBACK_RATES[code];
             const info = CURRENCIES[code];
-            return `<div class="aich-popup-row"><span class="aich-flag">${info ? info.flag : ''}</span><span class="aich-code">${code}</span><span class="aich-val">1 USD ≈ ${formatMoney(rate, code)}</span></div>`;
+            return `<div class="aich-popup-row"><span class="aich-flag">${info ? info.flag : ''}</span><span class="aich-code">${code}</span><span class="aich-val">${formatMoney(usd * rate, code)}</span></div>`;
         });
         rows.push(`<div class="aich-popup-foot"><a href="javascript:void(0)" data-popup-settings>设置</a></div>`);
         el.innerHTML = rows.join('');
@@ -575,14 +578,13 @@
         const r = activeBadge.getBoundingClientRect();
         const scrollY = window.scrollY || document.documentElement.scrollTop;
         const scrollX = window.scrollX || document.documentElement.scrollLeft;
-        const left = r.left + scrollX;
         const top = r.bottom + scrollY + 6;
-        // 水平越界：靠右对齐
-        const docWidth = document.documentElement.clientWidth;
-        const finalLeft = (left + el.offsetWidth > docWidth)
-            ? Math.max(0, r.right + scrollX - el.offsetWidth)
-            : left;
-        el.style.left = Math.max(0, finalLeft) + 'px';
+        // 水平越界：限制在当前可视文档范围内
+        const viewportRight = scrollX + document.documentElement.clientWidth;
+        const desiredLeft = r.left + scrollX;
+        const maxLeft = Math.max(scrollX, viewportRight - el.offsetWidth);
+        const finalLeft = Math.min(desiredLeft, maxLeft);
+        el.style.left = Math.max(scrollX, finalLeft) + 'px';
         // 垂直越界：翻转到 badge 上方
         if (top + el.offsetHeight > scrollY + window.innerHeight) {
             el.style.top = Math.max(0, r.top + scrollY - el.offsetHeight - 6) + 'px';
@@ -592,7 +594,7 @@
     }
 
     function showPopup(badge) {
-        if (!SETTINGS.popupEnabled) return;
+        if (!SETTINGS.popupEnabled || selectingText) return;
         clearTimeout(popupHideTimer);
         if (activeBadge !== badge) {
             activeBadge = badge;
@@ -614,6 +616,7 @@
      */
     function scheduleHidePopup() {
         clearTimeout(popupHideTimer);
+        if (selectingText) return;
         try {
             const sel = window.getSelection();
             if (sel && sel.toString()) return;
@@ -625,7 +628,7 @@
      * 滚动/缩放时跟随 badge 重新定位，badge 滚出视口才关闭
      */
     function repositionPopup() {
-        if (!popupEl || popupEl.style.display !== 'block' || !activeBadge) return;
+        if (selectingText || !popupEl || popupEl.style.display !== 'block' || !activeBadge) return;
         if (!activeBadge.isConnected) {
             hidePopup();
             return;
@@ -744,7 +747,8 @@
     function bindPopupEvents() {
         document.addEventListener('mouseover', (e) => {
             const badge = e.target.closest ? e.target.closest(`[${FLAG}]`) : null;
-            if (badge && badge.hasAttribute('data-usd')) showPopup(badge);
+            const from = e.relatedTarget;
+            if (badge && badge.hasAttribute('data-usd') && (!from || !badge.contains(from))) showPopup(badge);
         });
         document.addEventListener('mouseout', (e) => {
             const to = e.relatedTarget;
@@ -758,10 +762,10 @@
             const badge = e.target.closest ? e.target.closest(`[${FLAG}]`) : null;
             const inPopup = e.target.closest ? e.target.closest('[data-ai-cost-helper-popup]') : null;
             // 正在选中文本时（拖拽复制）不关闭浮窗
-            let selecting = false;
+            let selecting = selectingText;
             try {
                 const sel = window.getSelection();
-                selecting = !!sel && !!sel.toString();
+                selecting = selecting || !!sel && !!sel.toString();
             } catch (err) { /* ignore */ }
             if (badge && badge.hasAttribute('data-usd')) {
                 const el = getPopup();
@@ -771,6 +775,16 @@
             } else if (!inPopup && !selecting) {
                 hidePopup();
             }
+        });
+        document.addEventListener('mouseup', () => {
+            if (!selectingText) return;
+            selectingText = false;
+            if (popupEl && popupEl.style.display === 'block') positionPopup(popupEl);
+        });
+        document.addEventListener('selectstart', () => { selectingText = true; });
+        document.addEventListener('selectionchange', () => {
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed) selectingText = false;
         });
         // 滚动/缩放跟随 badge 重新定位，而不是直接关闭
         window.addEventListener('scroll', repositionPopup, true);
@@ -788,8 +802,9 @@
 
         const observer = new MutationObserver(mutations => {
             for (const mutation of mutations) {
+                if (mutation.target.closest && mutation.target.closest('[data-ai-cost-helper-popup]')) continue;
                 for (const node of mutation.addedNodes) {
-                    if (node.nodeType === 1) {
+                    if (node.nodeType === 1 && !node.closest('[data-ai-cost-helper-popup]')) {
                         scan(node);
                     }
                 }
