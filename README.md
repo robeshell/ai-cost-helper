@@ -24,9 +24,9 @@
 
 [![安装脚本](https://img.shields.io/badge/安装脚本-download-2ea44f.svg)](https://github.com/robeshell/ai-cost-helper/releases/latest)
 
-### 方式二：Greasy Fork（审核通过后）
+### 方式二：Greasy Fork
 
-<https://greasyfork.org/zh-CN/scripts/ai-cost-helper>
+<https://greasyfork.org/zh-CN/scripts/589304>
 
 ### 手动安装
 
