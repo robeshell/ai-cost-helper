@@ -432,7 +432,7 @@
             <div class="feature">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 <h3>非侵入式</h3>
-                <p>不修改网页原有内容，灰色小字标注换算结果，鼠标悬停可见汇率。</p>
+                <p>不修改网页原有内容，灰色小字标注换算结果，悬停或点击可查看多币种浮窗。</p>
             </div>
         </section>
 
@@ -554,7 +554,11 @@
 
             const FLAG = 'data-ai-cost-helper';
             const SIM = 'data-sim';
-            const SIM_RATE = 7.24; // 模拟汇率
+            const SIM_RATE = 7.24; // 模拟汇率（默认币种 CNY）
+            const SIM_CURRENCIES = { CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$', SGD: 'S$', KRW: '₩', AUD: 'A$', CAD: 'C$' };
+            const SIM_RATES = { CNY: 7.24, EUR: 0.92, GBP: 0.79, JPY: 150, HKD: 7.8, SGD: 1.34, KRW: 1350, AUD: 1.5, CAD: 1.36 };
+            let simDefault = 'CNY';
+            let simPopup = ['EUR', 'GBP', 'JPY', 'HKD', 'SGD', 'KRW', 'AUD', 'CAD'];
 
             function parseUSD(text) {
                 const regex = /\$((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g;
@@ -597,12 +601,20 @@
                 return String(Math.round(value * 10) / 10) + suffix;
             }
 
-            function createBadge(text, title) {
+            function formatMoney(amount, code) {
+                const value = (code === 'JPY' || code === 'KRW')
+                    ? Math.round(amount).toLocaleString('zh-CN')
+                    : String(Math.round(amount * 100) / 100);
+                return (SIM_CURRENCIES[code] || '') + value;
+            }
+
+            function createBadge(text, title, usdValue) {
                 const span = document.createElement('span');
                 span.className = 'badge';
                 span.textContent = text;
                 span.setAttribute(FLAG, 'true');
                 span.setAttribute(SIM, 'true');
+                if (usdValue != null) span.setAttribute('data-usd', String(usdValue));
                 span.title = title;
                 return span;
             }
@@ -620,11 +632,12 @@
                     const text = node.nodeValue;
 
                     const matches = parseUSD(text).map(m => {
-                        const rmb = m.value * SIM_RATE;
+                        const rate = SIM_RATES[simDefault] || SIM_RATES.CNY;
                         return {
                             ...m,
-                            badge: '≈ ¥' + (rmb >= 1e4 ? formatChinese(rmb) : rmb.toFixed(2)),
-                            title: '汇率 USD/CNY=' + SIM_RATE.toFixed(2)
+                            badge: '≈ ' + formatMoney(m.value * rate, simDefault),
+                            title: '汇率 USD/' + simDefault + '=' + rate.toFixed(2),
+                            usdValue: m.value
                         };
                     }).concat(parseUnits(text).map(m => ({
                         ...m,
@@ -654,7 +667,7 @@
                     for (const item of kept) {
                         if (item.start > cursor) frag.appendChild(document.createTextNode(text.substring(cursor, item.start)));
                         frag.appendChild(document.createTextNode(text.substring(item.start, item.end)));
-                        frag.appendChild(createBadge(item.badge, item.title));
+                        frag.appendChild(createBadge(item.badge, item.title, item.usdValue));
                         cursor = item.end;
                     }
                     if (cursor < text.length) frag.appendChild(document.createTextNode(text.substring(cursor)));
@@ -668,6 +681,61 @@
                     if (parent) parent.removeChild(el);
                 });
             }
+
+            // ===== 多币种浮窗演示 =====
+            let simPopupEl = null;
+            let simHideTimer = null;
+            let simActiveBadge = null;
+
+            function getSimPopup() {
+                if (simPopupEl) return simPopupEl;
+                simPopupEl = document.createElement('div');
+                simPopupEl.style.cssText = 'position:fixed;z-index:2147483647;background:#fff;color:#14161a;border:1px solid #e6e8ec;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:10px 14px;font-size:13px;line-height:1.8;display:none;min-width:150px;';
+                document.body.appendChild(simPopupEl);
+                return simPopupEl;
+            }
+
+            function showSimPopup(badge) {
+                clearTimeout(simHideTimer);
+                const usd = Number(badge.getAttribute('data-usd'));
+                if (!usd) return;
+                const el = getSimPopup();
+                if (simActiveBadge === badge) { el.style.display = 'block'; return; }
+                simActiveBadge = badge;
+                const codes = [...new Set([simDefault, ...simPopup])];
+                const rows = codes.map(c => '<div>' + c + ' ' + formatMoney(usd * (SIM_RATES[c] || SIM_RATES.CNY), c) + '</div>');
+                rows.push('<div style="color:#9ca3af;font-size:11px;margin-top:4px">演示浮窗 · 真实脚本可自定义币种</div>');
+                el.innerHTML = rows.join('');
+                el.style.display = 'block';
+                const r = badge.getBoundingClientRect();
+                el.style.left = Math.max(4, Math.min(r.left, window.innerWidth - el.offsetWidth - 8)) + 'px';
+                el.style.top = (r.bottom + 6 + el.offsetHeight > window.innerHeight)
+                    ? Math.max(4, r.top - el.offsetHeight - 6) + 'px'
+                    : (r.bottom + 6) + 'px';
+            }
+
+            function hideSimPopup() {
+                clearTimeout(simHideTimer);
+                if (simPopupEl) simPopupEl.style.display = 'none';
+            }
+
+            document.addEventListener('mouseover', (e) => {
+                const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
+                if (badge && badge.hasAttribute('data-usd')) showSimPopup(badge);
+            });
+            document.addEventListener('mouseout', (e) => {
+                const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
+                if (!badge) simHideTimer = setTimeout(hideSimPopup, 300);
+            });
+            document.addEventListener('click', (e) => {
+                const badge = e.target.closest ? e.target.closest('[' + FLAG + ']') : null;
+                if (badge && badge.hasAttribute('data-usd')) {
+                    if (simPopupEl && simPopupEl.style.display === 'block') hideSimPopup();
+                    else showSimPopup(badge);
+                } else {
+                    hideSimPopup();
+                }
+            });
 
             const toggle = document.getElementById('simToggle');
             toggle.addEventListener('change', function () {
