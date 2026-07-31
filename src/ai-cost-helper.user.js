@@ -4,7 +4,7 @@
 // @name:zh-TW   AI 成本換算助手
 // @name:en      AI Cost Helper
 // @namespace    https://github.com/robeshell/ai-cost-helper
-// @version      1.3.3
+// @version      1.4.0
 // @description  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-CN  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-TW  自動將網頁中的美元價格轉換為人民幣顯示，懸停查看多幣種換算，方便查看 AI API、模型調用和海外服務成本
@@ -81,6 +81,13 @@
     let SETTINGS = { ...DEFAULT_SETTINGS };
 
     /**
+     * 已处理文本节点 -> 上次处理的文本内容。
+     * 防重入：拆分出的新文本节点会登记，避免观察器回扫时把「$5」片段再次换算；
+     * 内容变化（characterData）时旧值不等新值，自动重处理。
+     */
+    const handled = new WeakMap();
+
+    /**
      * 加载设置（GM_* 不可用时回退默认）
      */
     function loadSettings() {
@@ -150,10 +157,10 @@
      * @param {string} code 币种代码
      */
     function formatMoney(amount, code) {
-        // 大面额币种用整数
-        const value = (code === 'JPY' || code === 'KRW')
-            ? Math.round(amount).toLocaleString('zh-CN')
-            : String(Math.round(amount * 100) / 100);
+        // 大面额币种取整；其余保留至多 2 位小数。统一千分位，提升大额可读性
+        const big = code === 'JPY' || code === 'KRW';
+        const rounded = big ? Math.round(amount) : Math.round(amount * 100) / 100;
+        const value = rounded.toLocaleString('zh-CN', { maximumFractionDigits: big ? 0 : 2 });
         const info = CURRENCIES[code];
         return `${info ? info.symbol : ''}${value}`;
     }
@@ -194,7 +201,10 @@
             style,
             textarea,
             input,
-            [data-ai-cost-helper-popup]
+            select,
+            [data-ai-cost-helper],
+            [data-ai-cost-helper-popup],
+            [data-ai-cost-helper-panel]
         `);
     }
 
@@ -292,8 +302,11 @@
         if (shouldIgnore(node)) return;
 
         const text = node.nodeValue;
-        const parent = node.parentElement;
-        if (parent && parent.querySelector(`[${FLAG}]`)) return;
+        // 防重入：内容未变则跳过（拆分出的片段已登记，观察器回扫时命中此处）
+        if (handled.get(node) === text) return;
+        handled.set(node, text);
+        // 快速过滤：无 $/逗号/数字 一定无匹配，跳过以降低高频变更场景的开销
+        if (!text || !/[\$,\d]/.test(text)) return;
 
         // 合并美元金额、大数、千分位数字匹配，按位置排序
         const matches = parseUSD(text)
@@ -338,18 +351,27 @@
 
         for (const m of kept) {
             if (m.start > cursor) {
-                fragment.appendChild(document.createTextNode(text.substring(cursor, m.start)));
+                fragment.appendChild(markText(text.substring(cursor, m.start)));
             }
-            fragment.appendChild(document.createTextNode(text.substring(m.start, m.end)));
+            fragment.appendChild(markText(text.substring(m.start, m.end)));
             fragment.appendChild(createBadge(m.badge, m.title, m.usdValue));
             cursor = m.end;
         }
 
         if (cursor < text.length) {
-            fragment.appendChild(document.createTextNode(text.substring(cursor)));
+            fragment.appendChild(markText(text.substring(cursor)));
         }
 
         node.replaceWith(fragment);
+    }
+
+    /**
+     * 创建文本节点并登记为已处理，避免观察器回扫时把已换算的片段（如「$5」）再次换算
+     */
+    function markText(s) {
+        const tn = document.createTextNode(s);
+        handled.set(tn, s);
+        return tn;
     }
 
     /**
@@ -379,11 +401,7 @@
         popupEl.style.cssText = `
             position: absolute;
             z-index: 2147483647;
-            background: #ffffff;
-            color: #1f2328;
-            border: 1px solid rgba(0,0,0,0.08);
             border-radius: 12px;
-            box-shadow: 0 12px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.06);
             padding: 8px;
             font-size: 13px;
             display: none;
@@ -404,6 +422,15 @@
         const style = document.createElement('style');
         style.id = 'aich-styles';
         style.textContent = `
+            [data-ai-cost-helper-popup] {
+                background: #ffffff;
+                color: #1f2328;
+                border: 1px solid rgba(0,0,0,0.08);
+                box-shadow: 0 12px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.06);
+            }
+            [data-ai-cost-helper-panel] {
+                background: rgba(0,0,0,0.4);
+            }
             [data-ai-cost-helper-popup] .aich-popup-row {
                 display: flex;
                 align-items: center;
@@ -541,6 +568,65 @@
             [data-ai-cost-helper-panel] .aich-panel-btn-primary:hover {
                 background: #5457e5;
             }
+
+            /* 深色模式：跟随系统偏好 */
+            @media (prefers-color-scheme: dark) {
+                [data-ai-cost-helper-popup] {
+                    background: #1f2328;
+                    color: #e6edf3;
+                    border-color: rgba(255,255,255,0.12);
+                    box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.4);
+                }
+                [data-ai-cost-helper-popup] .aich-popup-row:hover {
+                    background: #2d333b;
+                }
+                [data-ai-cost-helper-popup] .aich-code {
+                    color: #9198a1;
+                }
+                [data-ai-cost-helper-popup] .aich-val {
+                    color: #e6edf3;
+                }
+                [data-ai-cost-helper-popup] .aich-popup-foot {
+                    border-top-color: #30363d;
+                }
+                [data-ai-cost-helper-popup] .aich-popup-foot a {
+                    color: #818cf8;
+                }
+
+                [data-ai-cost-helper-panel] {
+                    background: rgba(0,0,0,0.6);
+                }
+                [data-ai-cost-helper-panel] .aich-panel-card {
+                    background: #1f2328;
+                    color: #e6edf3;
+                    box-shadow: 0 20px 48px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.4);
+                }
+                [data-ai-cost-helper-panel] .aich-panel-head {
+                    border-bottom-color: #30363d;
+                }
+                [data-ai-cost-helper-panel] .aich-panel-foot {
+                    border-top-color: #30363d;
+                }
+                [data-ai-cost-helper-panel] .aich-panel-label {
+                    color: #9198a1;
+                }
+                [data-ai-cost-helper-panel] .aich-panel-hint {
+                    color: #6e7681;
+                }
+                [data-ai-cost-helper-panel] .aich-panel-select {
+                    background: #2d333b;
+                    border-color: #3a4148;
+                    color: #e6edf3;
+                }
+                [data-ai-cost-helper-panel] .aich-panel-btn-ghost {
+                    background: #2d333b;
+                    border-color: #3a4148;
+                    color: #e6edf3;
+                }
+                [data-ai-cost-helper-panel] .aich-panel-btn-ghost:hover {
+                    background: #373e47;
+                }
+            }
         `;
         document.head.appendChild(style);
     }
@@ -661,7 +747,6 @@
             position: fixed;
             inset: 0;
             z-index: 2147483646;
-            background: rgba(0,0,0,0.4);
             display: none;
             align-items: center;
             justify-content: center;
@@ -738,6 +823,8 @@
             span.textContent = `≈ ${formatMoney(usd * rate, dc)}`;
             span.title = `汇率 USD/${dc}=${rate.toFixed(2)}`;
         });
+        // 重置缓存，确保下次悬停按新设置重新渲染浮窗（默认币种/浮窗币种即时生效）
+        activeBadge = null;
         hidePopup();
     }
 
@@ -802,9 +889,26 @@
 
         const observer = new MutationObserver(mutations => {
             for (const mutation of mutations) {
-                if (mutation.target.closest && mutation.target.closest('[data-ai-cost-helper-popup]')) continue;
+                // 文本内容变化（React/Vue 改文本走 textNode.data）：重新处理该节点
+                if (mutation.type === 'characterData') {
+                    const node = mutation.target;
+                    if (node.nodeType === Node.TEXT_NODE) processNode(node);
+                    continue;
+                }
+                // childList：跳过自身浮窗/面板/badge 内部的变更
+                const target = mutation.target;
+                if (target.closest && (
+                    target.closest('[data-ai-cost-helper-popup]') ||
+                    target.closest('[data-ai-cost-helper-panel]') ||
+                    target.closest('[data-ai-cost-helper]')
+                )) continue;
                 for (const node of mutation.addedNodes) {
-                    if (node.nodeType === 1 && !node.closest('[data-ai-cost-helper-popup]')) {
+                    if (node.nodeType === Node.TEXT_NODE) {
+                        // 框架用 textContent/append(text) 直接新增文本节点
+                        processNode(node);
+                    } else if (node.nodeType === Node.ELEMENT_NODE) {
+                        if (node.closest('[data-ai-cost-helper-popup]') ||
+                            node.closest('[data-ai-cost-helper-panel]')) continue;
                         scan(node);
                     }
                 }
@@ -813,7 +917,8 @@
 
         observer.observe(document.body, {
             childList: true,
-            subtree: true
+            subtree: true,
+            characterData: true
         });
 
         // 注册油猴菜单设置入口
