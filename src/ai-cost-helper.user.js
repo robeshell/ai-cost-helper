@@ -3,8 +3,8 @@
 // @name:zh-CN   AI 成本换算助手
 // @name:zh-TW   AI 成本換算助手
 // @name:en      AI Cost Helper
-// @namespace    https://github.com/wangwenyu
-// @version      1.0.0
+// @namespace    https://github.com/robeshell/ai-cost-helper
+// @version      1.0.1
 // @description  自动将网页中的美元价格转换为人民币显示，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-CN  自动将网页中的美元价格转换为人民币显示，方便查看 AI API、模型调用和海外服务成本
 // @description:en  Automatically convert USD prices on web pages to CNY, handy for checking AI API, model usage and overseas service costs
@@ -12,10 +12,10 @@
 // @license      MIT
 // @match        *://*/*
 // @run-at       document-end
-// @supportURL   https://github.com/wangwenyu/ai-cost-helper/issues
-// @homepageURL  https://github.com/wangwenyu/ai-cost-helper
-// @downloadURL  https://github.com/wangwenyu/ai-cost-helper/releases/latest/download/ai-cost-helper.user.js
-// @updateURL    https://github.com/wangwenyu/ai-cost-helper/releases/latest/download/ai-cost-helper.user.js
+// @supportURL   https://github.com/robeshell/ai-cost-helper/issues
+// @homepageURL  https://github.com/robeshell/ai-cost-helper
+// @downloadURL  https://github.com/robeshell/ai-cost-helper/releases/latest/download/ai-cost-helper.user.js
+// @updateURL    https://github.com/robeshell/ai-cost-helper/releases/latest/download/ai-cost-helper.user.js
 // @grant        none
 // ==/UserScript==
 

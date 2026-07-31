@@ -19,7 +19,7 @@
 
 从 Release 直接安装：
 
-[![安装脚本](https://img.shields.io/badge/安装脚本-download-2ea44f.svg)](https://github.com/wangwenyu/ai-cost-helper/releases/latest)
+[![安装脚本](https://img.shields.io/badge/安装脚本-download-2ea44f.svg)](https://github.com/robeshell/ai-cost-helper/releases/latest)
 
 ### 方式二：Greasy Fork（审核通过后）
 
@@ -28,7 +28,7 @@
 ### 手动安装
 
 1. 浏览器安装 [Tampermonkey](https://www.tampermonkey.net/) 扩展
-2. 打开 [ai-cost-helper.user.js](https://github.com/wangwenyu/ai-cost-helper/releases/latest/download/ai-cost-helper.user.js)
+2. 打开 [ai-cost-helper.user.js](https://github.com/robeshell/ai-cost-helper/releases/latest/download/ai-cost-helper.user.js)
 3. 点击「安装」即可
 
 ## 使用
@@ -49,7 +49,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/wangwenyu/ai-cost-helper.git
+git clone https://github.com/robeshell/ai-cost-helper.git
 
 # 在 Tampermonkey 中新建脚本，内容指向仓库中的 src/ai-cost-helper.user.js
 ```
