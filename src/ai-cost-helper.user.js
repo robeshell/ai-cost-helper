@@ -4,7 +4,7 @@
 // @name:zh-TW   AI 成本換算助手
 // @name:en      AI Cost Helper
 // @namespace    https://github.com/robeshell/ai-cost-helper
-// @version      1.4.2
+// @version      1.4.3
 // @description  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-CN  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-TW  自動將網頁中的美元價格轉換為人民幣顯示，懸停查看多幣種換算，方便查看 AI API、模型調用和海外服務成本
@@ -82,10 +82,16 @@
 
     /**
      * 已处理文本节点 -> 上次处理的文本内容。
-     * 防重入：拆分出的新文本节点会登记，避免观察器回扫时把「$5」片段再次换算；
+     * 防重入：splitText 切分出的片段会立即登记，避免观察器回扫时把「$5」片段再次换算；
      * 内容变化（characterData）时旧值不等新值，自动重处理。
      */
     const handled = new WeakMap();
+
+    /**
+     * 已处理文本节点 -> 我们在其后插入的节点（badge/切分片段）。
+     * 站点改文本重渲染时先按此清理，再重建，避免残留旧 badge。
+     */
+    const inserted = new WeakMap();
 
     /**
      * 加载设置（GM_* 不可用时回退默认）
@@ -398,13 +404,17 @@
 
     /**
      * 处理单个文本节点
+     *
+     * React 兼容：绝不对原文本节点调用 replaceWith/remove —— 那会摘除 React fiber 仍持有的
+     * text node，后续 React 卸载子树时 removeChild 会抛 NotFoundError（facebook/react#11538 同类）。
+     * 只在原节点后插入 badge；需在文本中段插入时用 splitText 切分，原节点始终保留在 DOM 中。
      */
     function processNode(node) {
         if (node.nodeType !== Node.TEXT_NODE) return;
         if (shouldIgnore(node)) return;
 
         const text = node.nodeValue;
-        // 防重入：内容未变则跳过（拆分出的片段已登记，观察器回扫时命中此处）
+        // 防重入：内容未变则跳过（切分出的片段已登记，观察器回扫时命中此处）
         if (handled.get(node) === text) return;
         handled.set(node, text);
         // 快速过滤：无 $/逗号/数字 一定无匹配，跳过以降低高频变更场景的开销
@@ -452,32 +462,57 @@
             }
         }
 
-        const fragment = document.createDocumentFragment();
-        let cursor = 0;
+        // 清理此前插入的节点（站点改文本后的重建，避免残留）
+        const prev = inserted.get(node);
+        if (prev) {
+            for (const n of prev) n.remove(); // 已脱离 DOM 的节点 remove() 是 no-op，安全
+            inserted.delete(node);
+        }
 
+        // 整节点就是一个匹配（最常见：孤立的 $5.00）——只在节点后插 badge，完全不动原节点
+        if (kept.length === 1 && kept[0].start === 0 && kept[0].end === text.length) {
+            const m = kept[0];
+            const badge = createBadge(m.badge, m.title, m.usdValue);
+            node.parentNode.insertBefore(badge, node.nextSibling);
+            inserted.set(node, [badge]);
+            return;
+        }
+
+        // 文本中段/多处匹配：用 splitText 切出匹配段再逐段插 badge。
+        // splitText 只把原节点变短并产生新片段，原节点始终是父节点的直接子节点 → React 卸载删它正常。
+        const created = [];
+        let remaining = node;
+        let offset = 0;
         for (const m of kept) {
-            if (m.start > cursor) {
-                fragment.appendChild(markText(text.substring(cursor, m.start)));
+            if (!remaining) break;
+            // 前进到匹配起点
+            if (m.start > offset) {
+                remaining.splitText(m.start - offset);
+                remaining = remaining.nextSibling;
+                handled.set(remaining, remaining.nodeValue); // 防回扫二次换算
+                created.push(remaining);
+                offset = m.start;
             }
-            fragment.appendChild(markText(text.substring(m.start, m.end)));
-            fragment.appendChild(createBadge(m.badge, m.title, m.usdValue));
-            cursor = m.end;
+            // 在匹配终点切分（匹配到文本末尾则跳过，避免空片段）
+            const segLen = m.end - offset;
+            if (segLen < remaining.length) {
+                remaining.splitText(segLen);
+                handled.set(remaining.nextSibling, remaining.nextSibling.nodeValue);
+                created.push(remaining.nextSibling);
+            }
+            const badge = createBadge(m.badge, m.title, m.usdValue);
+            remaining.parentNode.insertBefore(badge, remaining.nextSibling);
+            created.push(badge);
+            remaining = badge.nextSibling;
+            offset = m.end;
         }
-
-        if (cursor < text.length) {
-            fragment.appendChild(markText(text.substring(cursor)));
+        inserted.set(node, created);
+        // 让观察器对 splitText 触发的 characterData 命中防重入：
+        // 原节点与所有切分片段都登记为当前值，避免二次回扫把同一价格重复换算或折叠
+        handled.set(node, node.nodeValue);
+        for (const n of created) {
+            if (n.nodeType === Node.TEXT_NODE) handled.set(n, n.nodeValue);
         }
-
-        node.replaceWith(fragment);
-    }
-
-    /**
-     * 创建文本节点并登记为已处理，避免观察器回扫时把已换算的片段（如「$5」）再次换算
-     */
-    function markText(s) {
-        const tn = document.createTextNode(s);
-        handled.set(tn, s);
-        return tn;
     }
 
     /**

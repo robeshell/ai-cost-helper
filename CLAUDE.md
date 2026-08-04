@@ -39,7 +39,8 @@ git push origin vX.Y.Z   # 触发 release.yml
 ## 改动约束（重要）
 
 - **非侵入**：只追加 badge span，绝不修改网页原有文本/结构。
-- **避免 MutationObserver 反馈**：观察器会捕获自身写入。跳过自身元素（`[data-ai-cost-helper]` / `-popup` / `-panel`）内部变更；用模块级 `handled` WeakMap（文本节点 -> 上次文本）防重入，拆分片段用 `markText` 登记防回扫二次换算。
+- **避免 MutationObserver 反馈**：观察器会捕获自身写入。跳过自身元素（`[data-ai-cost-helper]` / `-popup` / `-panel`）内部变更；用模块级 `handled` WeakMap（文本节点 -> 上次文本）防重入，splitText 切分出的片段立即登记防回扫二次换算。
+- **React 兼容（不摘除 React 节点）**：绝不对原文本节点 `replaceWith`/`remove`，否则 React 卸载子树时 `removeChild` 抛 NotFoundError。整节点就是一个匹配 → 只在节点后 `insertBefore` badge；匹配在文本中段/多处 → 用 `splitText` 切分（原节点保留在 DOM 中）逐段插 badge；用 `inserted` WeakMap 记录插入节点，重渲染时先清理再重建。
 - **`shouldIgnore` 必须排除自身 badge**：`formatMoney` 千分位后 badge 含逗号，会被 `parseComma` 二次识别出嵌套 badge。
 - **价格识别三类**：同节点 `$5`；`$` 与数字拆到相邻内联元素（`adjacentText` 只跨内联、遇块级即停，不跨单元格）；K/M/B/T 与千分位大数。
 - **样式放 `injectStyles()` 不放行内 cssText**：浮窗/面板颜色要在样式表里，`@media (prefers-color-scheme: dark)` 才能覆盖。
