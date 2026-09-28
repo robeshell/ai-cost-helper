@@ -4,7 +4,7 @@
 // @name:zh-TW   AI 成本換算助手
 // @name:en      AI Cost Helper
 // @namespace    https://github.com/robeshell/ai-cost-helper
-// @version      1.4.3
+// @version      1.4.4
 // @description  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-CN  自动将网页中的美元价格转换为人民币显示，悬停查看多币种换算，方便查看 AI API、模型调用和海外服务成本
 // @description:zh-TW  自動將網頁中的美元價格轉換為人民幣顯示，懸停查看多幣種換算，方便查看 AI API、模型調用和海外服務成本
@@ -93,6 +93,9 @@
      */
     const inserted = new WeakMap();
 
+    // 拆分价格依赖相邻的货币符号；符号变化或节点移除时也要重新判断。
+    const splitPrices = new Map();
+
     /**
      * 加载设置（GM_* 不可用时回退默认）
      */
@@ -126,34 +129,45 @@
      * 获取汇率，7 天缓存（仅保留脚本用到的币种）
      */
     async function loadRate() {
+        const sharedStorage = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
+        const validRates = rates => Object.fromEntries(Object.keys(CURRENCIES)
+            .filter(code => rates && Number.isFinite(rates[code]) && rates[code] > 0)
+            .map(code => [code, rates[code]]));
+        // 缓存不可读或损坏时仍尝试联网；油猴环境使用跨站点共享存储。
         try {
-            const cache = localStorage.getItem(CACHE_KEY);
-            if (cache) {
-                const data = JSON.parse(cache);
-                if (Date.now() - data.time < CACHE_TTL && data.rates) {
-                    RATES = { ...FALLBACK_RATES, ...data.rates };
+            const cache = sharedStorage ? GM_getValue(CACHE_KEY, null) : localStorage.getItem(CACHE_KEY);
+            const data = typeof cache === 'string' ? JSON.parse(cache) : cache;
+            if (data && Number.isFinite(data.time) && data.time <= Date.now() && Date.now() - data.time < CACHE_TTL) {
+                const rates = validRates(data.rates);
+                if (Object.keys(rates).length) {
+                    RATES = { ...FALLBACK_RATES, ...rates };
                     return;
                 }
             }
+        } catch (e) {
+            /* 缓存异常不阻止获取汇率 */
+        }
 
-            const response = await fetch(RATE_API);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        try {
+            const response = await fetch(RATE_API, { signal: controller.signal });
+            if (!response.ok) throw new Error('汇率请求失败');
             const json = await response.json();
-
-            if (json && json.rates) {
-                const picked = {};
-                for (const code of Object.keys(CURRENCIES)) {
-                    if (json.rates[code]) picked[code] = json.rates[code];
-                }
-                if (Object.keys(picked).length) {
-                    RATES = { ...FALLBACK_RATES, ...picked };
-                    localStorage.setItem(CACHE_KEY, JSON.stringify({
-                        rates: picked,
-                        time: Date.now()
-                    }));
-                }
+            const picked = validRates(json && json.rates);
+            if (!Object.keys(picked).length) return;
+            RATES = { ...FALLBACK_RATES, ...picked };
+            try {
+                const cache = JSON.stringify({ rates: picked, time: Date.now() });
+                if (sharedStorage) GM_setValue(CACHE_KEY, cache);
+                else localStorage.setItem(CACHE_KEY, cache);
+            } catch (e) {
+                /* 存储失败不影响本次已获取的汇率 */
             }
         } catch (e) {
             console.log('[AI 成本换算助手] 汇率获取失败，使用默认汇率');
+        } finally {
+            clearTimeout(timeout);
         }
     }
 
@@ -162,13 +176,27 @@
      * @param {number} amount
      * @param {string} code 币种代码
      */
-    function formatMoney(amount, code) {
-        // 大面额币种取整；其余保留至多 2 位小数。统一千分位，提升大额可读性
-        const big = code === 'JPY' || code === 'KRW';
-        const rounded = big ? Math.round(amount) : Math.round(amount * 100) / 100;
-        const value = rounded.toLocaleString('zh-CN', { maximumFractionDigits: big ? 0 : 2 });
+    function formatMoney(amount, code, compact = false) {
         const info = CURRENCIES[code];
-        return `${info ? info.symbol : ''}${value}`;
+        const symbol = info ? info.symbol : '';
+        if (compact && amount >= 1e4) {
+            // 标签缩写，浮窗仍展示完整金额；进位到一亿时同步提升单位。
+            const divisor = amount >= 1e8 || Math.round(amount / 1e4 * 100) / 100 >= 1e4 ? 1e8 : 1e4;
+            const value = (amount / divisor).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+            return `${symbol}${value}${divisor === 1e8 ? '亿' : '万'}`;
+        }
+        // 小于 1 的非零金额保留 3 位有效数字，避免微小 API 单价显示为零。
+        const options = amount > 0 && amount < 1
+            ? { maximumSignificantDigits: 3 }
+            : { maximumFractionDigits: code === 'JPY' || code === 'KRW' ? 0 : 2 };
+        return `${symbol}${amount.toLocaleString('zh-CN', options)}`;
+    }
+
+    /**
+     * 标题始终保留完整本币金额，关闭浮窗后也可查看缩写对应的数值。
+     */
+    function moneyTitle(usd, code, rate) {
+        return `${formatMoney(usd * rate, code)} · 汇率 USD/${code}=${rate.toFixed(2)}`;
     }
 
     /**
@@ -215,15 +243,34 @@
     }
 
     /**
+     * 美元前缀：裸 $、US$、USD$ 可识别；其它字母前缀保守跳过。
+     * 同时查看相邻内联节点，避免把 <span>CA</span><span>$5</span> 当美元。
+     */
+    function isUSDContext(text, dollarIndex, node) {
+        let before = text.slice(0, dollarIndex);
+        if (!before.trim() && node) {
+            const previous = adjacentText(node, 'prev');
+            if (previous && !shouldIgnore(previous)) before = previous.nodeValue + before;
+        }
+        const prefix = before.match(/([A-Za-z]+)(\s*)$/);
+        if (!prefix || /^(?:US|USD)$/i.test(prefix[1])) return true;
+        // Price $5 等普通文字后的空格不属于币种前缀；CA $5 仍应排除。
+        return !!prefix[2] && !/^(?:CA|CAD|C|AU|AUD|A|NZ|NZD|HK|HKD|SG|SGD|S|NT|TWD|R|BRL|MX|MXN)$/i.test(prefix[1]);
+    }
+
+    /**
      * 查找美元金额（支持千分位，如 $2,400,000）
      */
-    function parseUSD(text) {
+    function parseUSD(text, node) {
         const regex = /\$((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g;
         const result = [];
         let match;
         while ((match = regex.exec(text))) {
+            if (!isUSDContext(text, match.index, node)) continue;
+            const value = Number(match[1].replace(/,/g, ''));
+            if (!Number.isFinite(value)) continue;
             result.push({
-                value: Number(match[1].replace(/,/g, '')),
+                value,
                 start: match.index,
                 end: regex.lastIndex
             });
@@ -244,12 +291,28 @@
     /**
      * 查找 K/M/B/T 大数（仅大写，避免误伤 5m、5G、MB 等；支持千分位）
      */
-    function parseUnits(text) {
+    function parseUnits(text, node) {
         const regex = /\b((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)([KMBT])\b/g;
         const result = [];
         let match;
         while ((match = regex.exec(text))) {
             const unit = match[2];
+            // K 常用于分辨率；要求金额或 token/调用量等明确计数上下文。
+            if (unit === 'K') {
+                let before = text.slice(Math.max(0, match.index - 32), match.index);
+                let after = text.slice(regex.lastIndex, regex.lastIndex + 32);
+                if (!before.trim() && node) {
+                    const previous = adjacentText(node, 'prev');
+                    if (previous && !shouldIgnore(previous)) before = previous.nodeValue.slice(-32);
+                }
+                if (!after.trim() && node) {
+                    const next = adjacentText(node, 'next');
+                    if (next && !shouldIgnore(next)) after = next.nodeValue.slice(0, 32);
+                }
+                const countAfter = /^\s*(?:tokens?\b|requests?\b|calls?\b|parameters?\b|params?\b|users?\b|次|个|条|枚|用户|参数|令牌)/i;
+                const countBefore = /(?:tokens?|requests?|calls?|parameters?|params?|users?|context|参数|令牌|调用量|上下文|用户数)\s*[:：]?\s*$/i;
+                if (!/\$\s*$/.test(before) && !countAfter.test(after) && !countBefore.test(before)) continue;
+            }
             result.push({
                 value: Number(match[1].replace(/,/g, '')) * UNIT_MULTIPLIERS[unit],
                 start: match.index,
@@ -359,47 +422,48 @@
     }
 
     /**
-     * 在数字节点后插入或更新拆分价格的换算 badge
-     */
-    function upsertSplitBadge(numberNode, usd) {
-        const dc = SETTINGS.defaultCurrency;
-        const rate = RATES[dc] || FALLBACK_RATES[dc];
-        const existing = numberNode.nextSibling;
-        if (existing && existing.nodeType === 1 && existing.hasAttribute('data-ai-cost-helper')) {
-            // 已有 badge：若是 USD badge 则更新金额（价格随 characterData 变化时）
-            if (existing.hasAttribute('data-usd')) {
-                existing.setAttribute('data-usd', String(usd));
-                existing.textContent = `≈ ${formatMoney(usd * rate, dc)}`;
-                existing.title = `汇率 USD/${dc}=${rate.toFixed(2)}`;
-            }
-            return;
-        }
-        const badge = createBadge(`≈ ${formatMoney(usd * rate, dc)}`, `汇率 USD/${dc}=${rate.toFixed(2)}`, usd);
-        numberNode.parentNode.insertBefore(badge, numberNode.nextSibling);
-    }
-
-    /**
-     * 处理 `$` 与数字被拆到不同节点的情况（常见于把货币符号单独着色的表格）。
-     * 当前节点为「孤立的 $」或「纯数字且前置相邻为 $」时，把换算 badge 插到数字节点之后。
+     * 拆分价格优先于千分位大数；由数字节点统一持有标签，避免重复插入。
      */
     function trySplitPrice(node) {
         const text = node.nodeValue;
-        let numberNode, usd;
-        if (/^\s*\$\s*$/.test(text)) {
-            const nt = adjacentText(node, 'next');
-            if (!nt || !/^\s*[\d,]+(?:\.\d+)?\s*$/.test(nt.nodeValue)) return;
-            numberNode = nt;
-            usd = Number(nt.nodeValue.replace(/,/g, ''));
-        } else if (/^\s*[\d,]+(?:\.\d+)?\s*$/.test(text)) {
-            const pt = adjacentText(node, 'prev');
-            if (!pt || !/^\s*\$\s*$/.test(pt.nodeValue)) return;
-            numberNode = node;
-            usd = Number(text.replace(/,/g, ''));
-        } else {
-            return;
+        if (/^\s*(?:US|USD)?\$\s*$/i.test(text)) {
+            const next = adjacentText(node, 'next');
+            if (next && !shouldIgnore(next) && /^\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*$/.test(next.nodeValue)) {
+                handled.delete(next);
+                processNode(next);
+            }
+            return false;
         }
-        if (!isFinite(usd) || usd <= 0) return;
-        upsertSplitBadge(numberNode, usd);
+        if (!/^\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*$/.test(text)) return false;
+        const symbol = adjacentText(node, 'prev');
+        if (!symbol || shouldIgnore(symbol) || !/^\s*(?:US|USD)?\$\s*$/i.test(symbol.nodeValue) ||
+            !isUSDContext(symbol.nodeValue, symbol.nodeValue.indexOf('$'), symbol)) return false;
+        const usd = Number(text.replace(/,/g, ''));
+        if (!Number.isFinite(usd)) return false;
+        const dc = SETTINGS.defaultCurrency;
+        const rate = RATES[dc] || FALLBACK_RATES[dc];
+        const badge = createBadge(`≈ ${formatMoney(usd * rate, dc, true)}`, moneyTitle(usd, dc, rate), usd);
+        node.parentNode.insertBefore(badge, node.nextSibling);
+        inserted.set(node, [badge]);
+        splitPrices.set(node, { symbol, badge });
+        return true;
+    }
+
+    /**
+     * 检查拆分价格的上下文，覆盖只改符号、移除符号或移动数字节点的情况。
+     */
+    function refreshSplitPrices() {
+        for (const [node, { symbol, badge }] of splitPrices) {
+            if (!node.isConnected || shouldIgnore(node) || !symbol.isConnected ||
+                shouldIgnore(symbol) || !/^\s*(?:US|USD)?\$\s*$/i.test(symbol.nodeValue) ||
+                !isUSDContext(symbol.nodeValue, symbol.nodeValue.indexOf('$'), symbol) ||
+                adjacentText(node, 'prev') !== symbol || node.nextSibling !== badge) {
+                splitPrices.delete(node);
+                badge.remove();
+                handled.delete(node);
+                processNode(node);
+            }
+        }
     }
 
     /**
@@ -410,30 +474,39 @@
      * 只在原节点后插入 badge；需在文本中段插入时用 splitText 切分，原节点始终保留在 DOM 中。
      */
     function processNode(node) {
-        if (node.nodeType !== Node.TEXT_NODE) return;
+        if (node.nodeType !== Node.TEXT_NODE || !node.isConnected) return;
         if (shouldIgnore(node)) return;
 
         const text = node.nodeValue;
         // 防重入：内容未变则跳过（切分出的片段已登记，观察器回扫时命中此处）
         if (handled.get(node) === text) return;
         handled.set(node, text);
+        // 先清理再过滤：新内容即使不含价格，也不能留下旧标签或切分片段。
+        const prev = inserted.get(node);
+        if (prev) {
+            for (const n of prev) n.remove();
+            inserted.delete(node);
+        }
+        splitPrices.delete(node);
         // 快速过滤：无 $/逗号/数字 一定无匹配，跳过以降低高频变更场景的开销
         if (!text || !/[\$,\d]/.test(text)) return;
 
+        if (trySplitPrice(node)) return;
+
         // 合并美元金额、大数、千分位数字匹配，按位置排序
-        const matches = parseUSD(text)
+        const matches = parseUSD(text, node)
             .map(m => {
                 const dc = SETTINGS.defaultCurrency;
                 const rate = RATES[dc] || FALLBACK_RATES[dc];
                 const converted = m.value * rate;
                 return {
                     ...m,
-                    badge: `≈ ${formatMoney(converted, dc)}`,
-                    title: `汇率 USD/${dc}=${rate.toFixed(2)}`,
+                    badge: `≈ ${formatMoney(converted, dc, true)}`,
+                    title: moneyTitle(m.value, dc, rate),
                     usdValue: m.value
                 };
             })
-            .concat(parseUnits(text).map(m => ({
+            .concat(parseUnits(text, node).map(m => ({
                 ...m,
                 badge: `≈ ${formatChinese(m.value)}`,
                 title: m.value.toLocaleString('zh-CN')
@@ -445,11 +518,7 @@
             })))
             .sort((a, b) => a.start - b.start);
 
-        if (matches.length === 0) {
-            // 未匹配到完整价格时，尝试 `$` 与数字被拆分到不同节点的情况
-            trySplitPrice(node);
-            return;
-        }
+        if (matches.length === 0) return;
 
         // 当匹配重叠时（如 $2.4B：美元 $2.4 与大数 2.4B），保留覆盖更完整的那个
         const kept = [];
@@ -460,13 +529,6 @@
             } else {
                 kept.push(m);
             }
-        }
-
-        // 清理此前插入的节点（站点改文本后的重建，避免残留）
-        const prev = inserted.get(node);
-        if (prev) {
-            for (const n of prev) n.remove(); // 已脱离 DOM 的节点 remove() 是 no-op，安全
-            inserted.delete(node);
         }
 
         // 整节点就是一个匹配（最常见：孤立的 $5.00）——只在节点后插 badge，完全不动原节点
@@ -961,8 +1023,8 @@
         const rate = RATES[dc] || FALLBACK_RATES[dc];
         document.querySelectorAll(`[${FLAG}][data-usd]`).forEach(span => {
             const usd = Number(span.getAttribute('data-usd'));
-            span.textContent = `≈ ${formatMoney(usd * rate, dc)}`;
-            span.title = `汇率 USD/${dc}=${rate.toFixed(2)}`;
+            span.textContent = `≈ ${formatMoney(usd * rate, dc, true)}`;
+            span.title = moneyTitle(usd, dc, rate);
         });
         // 重置缓存，确保下次悬停按新设置重新渲染浮窗（默认币种/浮窗币种即时生效）
         activeBadge = null;
@@ -1054,6 +1116,7 @@
                     }
                 }
             }
+            refreshSplitPrices();
         });
 
         observer.observe(document.body, {
@@ -1072,5 +1135,7 @@
     // （如演示页自带模拟器，避免与真实脚本重复展示）
     if (document.querySelector('meta[name="ai-cost-helper"][content="disabled"]')) return;
 
-    loadRate().then(start);
+    // 先用兜底汇率启动，网络慢或离线时页面也能立即换算。
+    start();
+    loadRate().then(refreshBadges);
 })();
